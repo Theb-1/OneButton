@@ -17,8 +17,8 @@ OneButton::OneButton(int pin, int activeLow)
   pinMode(pin, INPUT);      // sets the MenuPin as input
   _pin = pin;
 
-  _clickTicks = 600;        // number of millisec that have to pass by before a click is detected.
-  _pressTicks = 1000;       // number of millisec that have to pass by before a long button press is detected.
+  _timeoutTicks = 300;        // number of millisec that have to pass by before a pattern end is detected.
+  _longPressTicks = 700;       // number of millisec that have to pass by before a long button press is detected.
  
   _state = 0; // starting with state 0: waiting for button to be pressed
   _isLongPressed = false;  // Keep track of long press state
@@ -35,24 +35,27 @@ OneButton::OneButton(int pin, int activeLow)
     _buttonPressed = HIGH;
   } // if
 
-
+  _clickFunc = NULL;
   _doubleClickFunc = NULL;
   _pressFunc = NULL;
   _longPressStartFunc = NULL;
   _longPressStopFunc = NULL;
   _duringLongPressFunc = NULL;
+  _duringLongPressFunc = NULL;
+  _patternStartFunc = NULL;
+  _patternEndFunc = NULL;
 } // OneButton
 
 
-// explicitly set the number of millisec that have to pass by before a click is detected.
+// explicitly set the number of millisec that have to pass by before a click timeout is detected.
 void OneButton::setClickTicks(int ticks) { 
-  _clickTicks = ticks;
+  _timeoutTicks = ticks;
 } // setClickTicks
 
 
 // explicitly set the number of millisec that have to pass by before a long button press is detected.
 void OneButton::setPressTicks(int ticks) {
-  _pressTicks = ticks;
+  _longPressTicks = ticks;
 } // setPressTicks
 
 
@@ -92,12 +95,42 @@ void OneButton::attachLongPressStop(callbackFunction newFunction)
 // save function for during longPress event
 void OneButton::attachDuringLongPress(callbackFunction newFunction)
 {
+  _longPressReTicks = 0;
   _duringLongPressFunc = newFunction;
 } // attachDuringLongPress
+
+// save function for during longPress event w/ repeat time
+void OneButton::attachDuringLongPress(callbackFunction newFunction, int repeatMS)
+{
+  _longPressReTicks = repeatMS;
+  _duringLongPressFunc = newFunction;
+} // attachDuringLongPress
+
+// save function for during patternStart event
+void OneButton::attachPatternStart(callbackFunction newFunction)
+{
+  _patternStartFunc = newFunction;
+} // attachPatternStart
+
+// save function for during patternEnd event
+void OneButton::attachPatternEnd(callbackFunction newFunction)
+{
+  _patternEndFunc = newFunction;
+} // attachPatternEnd
 
 // function to get the current long pressed state
 bool OneButton::isLongPressed(){
   return _isLongPressed;
+}
+
+// function to get the current current pattern length
+int OneButton::getPatternLength(){
+  return _patternLength;
+}
+
+// function to get the current current pattern string. C = Click, L = LongPress
+String OneButton::getPattern(){
+  return _pattern;
 }
 
 void OneButton::tick(void)
@@ -107,58 +140,71 @@ void OneButton::tick(void)
   unsigned long now = millis(); // current (relative) time in msecs.
 
   // Implementation of the state machine
-  if (_state == 0) { // waiting for menu pin being pressed.
+  if (_state == 0) { // waiting for button pin being pressed.
     if (buttonLevel == _buttonPressed) {
       _state = 1; // step to state 1
       _startTime = now; // remember starting time
     } // if
-
-  } else if (_state == 1) { // waiting for menu pin being released.
-
-    if ((buttonLevel == _buttonReleased) && (now < _startTime + _debounceTicks)) {
-      // button was released to quickly so I assume some debouncing.
-	  // go back to state 0 without calling a function.
-      _state = 0;
-
-    } else if (buttonLevel == _buttonReleased) {
-      _state = 2; // step to state 2
-
-    } else if ((buttonLevel == _buttonPressed) && (now > _startTime + _pressTicks)) {
-      _isLongPressed = true;  // Keep track of long press state
+    
+  } else if (_state == 1) { // waiting for debounce
+    if ((buttonLevel == _buttonPressed) && (now > _startTime + _debounceTicks)) {
       if (_pressFunc) _pressFunc();
-	  if (_longPressStartFunc) _longPressStartFunc();
-	  if (_duringLongPressFunc) _duringLongPressFunc();
-      _state = 6; // step to state 6
+      _state = 2;
+ 
+    } else if (buttonLevel == _buttonReleased) {
+      // button was released to quickly so I assume some debouncing.
+      _state = 0; // restart
+    }
+    
+  } else if (_state == 2) { // waiting for button pin being released.
+    if (buttonLevel == _buttonReleased) {
+      _releaseTime = now;
+      _pattern = _pattern + "C";
+      _patternLength += 1;
       
-    } else {
-      // wait. Stay in this state.
+      if (_patternLength == 1) { // check for pattern start
+        if (_patternStartFunc) _patternStartFunc();
+      }
+	  if (_pattern == "CC") { // check for double click
+		if (_doubleClickFunc) _doubleClickFunc();
+	  }
+	  if (_clickFunc) _clickFunc();
+      _state = 3;
+
+    } else if (now > _startTime + _longPressTicks) {
+      _isLongPressed = true;  // Keep track of long press state
+      _pattern = _pattern + "L";
+      _patternLength += 1;
+      
+	  if (_patternLength == 1) { // check for pattern start
+        if (_patternStartFunc) _patternStartFunc();
+      }
+      if (_longPressStartFunc) _longPressStartFunc();
+      _state = 6;      
     } // if
 
-  } else if (_state == 2) { // waiting for menu pin being pressed the second time or timeout.
-    if (now > _startTime + _clickTicks) {
-      // this was only a single short click
-      if (_clickFunc) _clickFunc();
+  } else if (_state == 3) { // waiting for button pin being pressed again or timeout.
+    if (now > _releaseTime + _timeoutTicks) {
+      // pattern timeout
+      if (_patternEndFunc) _patternEndFunc();
+      
+      _pattern = "";
+      _patternLength = 0;
       _state = 0; // restart.
 
     } else if (buttonLevel == _buttonPressed) {
-      _state = 3; // step to state 3
+      _state = 0; // restart
     } // if
 
-  } else if (_state == 3) { // waiting for menu pin being released finally.
+  } else if (_state == 6) { // waiting for button pin being release after long press.
     if (buttonLevel == _buttonReleased) {
-      // this was a 2 click sequence.
-      if (_doubleClickFunc) _doubleClickFunc();
-      _state = 0; // restart.
-    } // if
-
-  } else if (_state == 6) { // waiting for menu pin being release after long press.
-    if (buttonLevel == _buttonReleased) {
-	  _isLongPressed = false;  // Keep track of long press state
-	  if(_longPressStopFunc) _longPressStopFunc();
-      _state = 0; // restart.
-    } else {
-	  // button is being long pressed
-	  _isLongPressed = true; // Keep track of long press state
+      _releaseTime = now;
+      _isLongPressed = false;  // Keep track of long press state
+      if(_longPressStopFunc) _longPressStopFunc();
+      _state = 3; // wait for timeout.
+      
+    } else if ((now > _longPressLastCall + _longPressReTicks)) {
+          _longPressLastCall = now;
 	  if (_duringLongPressFunc) _duringLongPressFunc();
     } // if  
 
@@ -167,4 +213,3 @@ void OneButton::tick(void)
 
 
 // end.
-

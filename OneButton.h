@@ -10,6 +10,9 @@
 // 01.12.2011 include file changed to work with the Arduino 1.0 environment
 // 23.03.2014 Enhanced long press functionalities by adding longPressStart and longPressStop callbacks
 // 21.09.2015 A simple way for debounce detection added.
+// 03.10.2015 Modifications by Ryan Tyler (tested with ESP8266):
+//    - Add click pattern for detecting any variety of click/long press combination
+//    - Add adjustable repeat time to LongPress
 // -----
 
 #ifndef OneButton_h
@@ -45,21 +48,31 @@ public:
   void attachLongPressStart(callbackFunction newFunction);
   void attachLongPressStop(callbackFunction newFunction);
   void attachDuringLongPress(callbackFunction newFunction);
+  void attachDuringLongPress(callbackFunction newFunction, int repeatTime);
+  void attachPatternStart(callbackFunction newFunction);
+  void attachPatternEnd(callbackFunction newFunction);
 
   // ----- State machine functions -----
 
   // call this function every some milliseconds for handling button events.
   void tick(void);
+  
   bool isLongPressed();
-
+  int getPatternLength();
+  String getPattern();  // returns click pattern, C = click, L = long press
+  
 private:
   int _pin;        // hardware pin number. 
-  int _clickTicks; // number of ticks that have to pass by before a click is detected
-  int _pressTicks; // number of ticks that have to pass by before a long button press is detected
+  int _timeoutTicks; // number of ticks that have to pass by before a click end is detected
+  int _longPressTicks; // number of ticks that have to pass by before a long button press is detected
+  int _longPressReTicks; // number of ticks that have to pass between long press callbacks
   const int _debounceTicks = 50; // number of ticks for debounce times.
   
   int _buttonReleased;
   int _buttonPressed;
+
+  int _patternLength;
+  String _pattern;
 
   bool _isLongPressed;
 
@@ -70,11 +83,15 @@ private:
   callbackFunction _longPressStartFunc;
   callbackFunction _longPressStopFunc;
   callbackFunction _duringLongPressFunc;
+  callbackFunction _patternStartFunc;
+  callbackFunction _patternEndFunc;
 
   // These variables that hold information across the upcoming tick calls.
   // They are initialized once on program start and are updated every time the tick function is called.
   int _state;
   unsigned long _startTime; // will be set in state 1
+  unsigned long _releaseTime;
+  unsigned long _longPressLastCall;
 };
 
 #endif
